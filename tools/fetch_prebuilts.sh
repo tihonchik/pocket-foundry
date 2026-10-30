@@ -6,7 +6,7 @@ set -e
 # ///////////////
 
 # --- RELEASE VERSION (change manually when needed) ---
-DEFAULT_VERSION="0.6.4"
+DEFAULT_VERSION="0.6.5"
 VERSION="${1:-$DEFAULT_VERSION}"
 REPO="JulioFerrero/pocket-foundry"
 
