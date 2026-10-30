@@ -98,10 +98,12 @@ object Session {
     fun quit() {
         val process = game ?: return
         if (state == State.QUITTING || !process.isAlive) return
-        Os.kill(gamePid, OsConstants.SIGCONT)
-        Os.kill(gamePid, OsConstants.SIGTERM)
+        val pid = gamePid
+        Os.kill(pid, OsConstants.SIGCONT)
+        Os.kill(pid, OsConstants.SIGTERM)
         setState(State.QUITTING)
-        main.postDelayed({ if (process.isAlive) process.destroyForcibly() }, 30_000)
+        // A game hung in the GPU driver ignores SIGTERM. Not destroyForcibly(): on Android it sends SIGTERM again.
+        main.postDelayed({ if (process.isAlive) Os.kill(pid, OsConstants.SIGKILL) }, 10_000)
     }
 
     @Synchronized
@@ -237,6 +239,10 @@ object Session {
             // SDL would also open the real controller there, and every press would count twice. No device has this id.
             put("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "0x0000/0x0000")
             put("POCKETFOUNDRY_FRAME_RATE", paths.frameRate.path)
+            // A program restarting itself (Factorio after a mod change) runs the loader again with only its own
+            // arguments: our loader then runs this program, with this library path (runtime/glibc/patches).
+            put("POCKETFOUNDRY_PROGRAM", command.first())
+            put("GLIBC_LD_LIBRARY_PATH", libraryPath)
             putAll(extra)
         }
         return pb.redirectErrorStream(true).redirectOutput(File(paths.logs, log)).start()
