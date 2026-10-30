@@ -37,7 +37,7 @@ mkdir -p "$TMP_DIR"
 TMP_APK="${TMP_DIR}/${APK_NAME}"
 
 # 1. Download
-echo "[1/3] Downloading the official APK..."
+echo "[1/4] Downloading the official APK..."
 if ! curl -L --fail --progress-bar "$URL" -o "$TMP_APK"; then
     echo "❌ Download failed! Check if release v${VERSION} exists at:"
     echo "   https://github.com/${REPO}/releases/tag/v${VERSION}"
@@ -45,12 +45,17 @@ if ! curl -L --fail --progress-bar "$URL" -o "$TMP_APK"; then
     exit 1
 fi
 
-# 2. Extract native libraries
-echo "[2/3] Extracting .so libraries to $JNI_DIR..."
+# 2. Cleaning
+echo "[2/4] Cleaning up previous prebuilt files..."
+rm -f "$JNI_DIR"/*.so
+rm -f "$ASSETS_DIR"/runtime.*
+
+# 3. Extract native libraries
+echo "[3/4] Extracting .so libraries to $JNI_DIR..."
 unzip -j -q -o "$TMP_APK" "lib/arm64-v8a/*.so" -d "$JNI_DIR"
 
-# 3. Extract runtime
-echo "[3/3] Extracting runtime to $ASSETS_DIR..."
+# 4. Extract runtime
+echo "[4/4] Extracting runtime to $ASSETS_DIR..."
 unzip -j -q -o "$TMP_APK" "assets/runtime.*" -d "$ASSETS_DIR"
 
 # Clean up temporary files
