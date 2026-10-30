@@ -61,4 +61,4 @@ echo "✅ Done! Files successfully installed:"
 ls -lh "$JNI_DIR"
 ls -lh "$ASSETS_DIR"/runtime.*
 echo ""
-echo "You can now run: ./gradlew installDebug"
+echo "You can now run: ./gradlew installDebug -PSKIP_CXX=true"
