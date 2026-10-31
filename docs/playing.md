@@ -16,6 +16,7 @@ Your finger is the cursor: touch the game where you want something to happen.
 | Button | In Factorio |
 |---|---|
 | Left stick | Walk. |
+| Right stick | Moves the cursor. |
 | Y (the largest) | Inventory and crafting. |
 | A | Build, open, craft, pick up. |
 | X | Mine, craft 5. |
@@ -26,8 +27,8 @@ Your finger is the cursor: touch the game where you want something to happen.
 | D-pad | Right rotates, down picks up items, up shows details on the map. |
 | The two under the toolbar | Map and game menu. |
 
-The toolbar at the top moves and resizes the buttons (pinch one), adds and removes them (a right stick and the
-sticks' clicks), fades or hides them all, and opens the phone's keyboard, for naming a save. Back, or a controller's
+The toolbar at the top moves and resizes the buttons (pinch one), removes them and adds them back, fades or hides
+them all, and opens the phone's keyboard, for naming a save. Back, or a controller's
 home button, opens the pause menu; the game freezes while it's off screen.
 
 ## Controllers
@@ -49,12 +50,23 @@ still works as the mouse too.
 ## Settings
 
 - **Resolution** the game draws at. Default comes from the screen's density, so the game looks the same size on any
-  phone.
+  phone. The two below it, the lowest marked CPU, keep the same view with fewer pixels.
 - **Frame rate** capped at 30 or 60 FPS; the game keeps 60 updates a second.
 - **A frame** round the game, which keeps the screen's rounded corners off its menus.
 - **Sprite quality:** Medium takes about 700 MB off the phone's shared memory, for very big saves or Mali GPUs.
+- **Graphics:** Light turns off Factorio's smoke, clouds, decoratives, particles, shadows and terrain effects, which
+  roughly halves what the phone draws. Full puts them back.
 - **Driver:** see [Phones and drivers](phones.md).
+- **FPS counter** in the game's top-left corner.
+- **Check for updates:** see below.
 - Pausing in the background, and vibration.
+
+## Updates
+
+When it opens, Pocket Foundry asks GitHub whether a newer version is out. If one is, it shows what changed since
+yours and offers **Update**, which downloads it, checks it against the release's checksum and hands it to Android's
+installer. The first time, Android asks you to allow Pocket Foundry to install apps. **Settings** keeps the offer
+next to the version, and **Check for updates** there turns the check off.
 
 ## Saves
 

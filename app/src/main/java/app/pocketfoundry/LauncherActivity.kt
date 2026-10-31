@@ -18,6 +18,8 @@ import android.text.TextWatcher
 import android.text.format.DateUtils
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
+import android.text.style.LeadingMarginSpan
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -44,6 +46,7 @@ import app.pocketfoundry.ui.dpi
 import app.pocketfoundry.ui.groove
 import app.pocketfoundry.ui.heading
 import app.pocketfoundry.ui.immersive
+import app.pocketfoundry.ui.keepScrollBar
 import app.pocketfoundry.ui.label
 import app.pocketfoundry.ui.slider
 import app.pocketfoundry.ui.stack
@@ -94,9 +97,18 @@ class LauncherActivity : Activity() {
     private lateinit var fps30: FButton
     private lateinit var fps60: FButton
     private lateinit var sprites: Dropdown
+    private lateinit var graphicsFull: FButton
+    private lateinit var graphicsLight: FButton
     private lateinit var settingsNote: TextView
     private lateinit var editLayout: FButton
     private lateinit var importAgain: FButton
+    private lateinit var update: FButton
+    private var updating: String? = null
+    private var updateError: String? = null
+    private var updateButton: FButton? = null
+    private var updateStatus: TextView? = null
+    private var downloaded: File? = null
+    private var checkingUpdates = false
     private lateinit var homeGroove: View
 
     private var dialog: View? = null
@@ -116,6 +128,7 @@ class LauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         paths = Paths(this)
         applyDisplayDefaults(this)
+        checkForUpdates()
         window.setDecorFitsSystemWindows(false)
 
         val overlay = FrameLayout(this)
@@ -158,6 +171,8 @@ class LauncherActivity : Activity() {
         immersive()
         Session.addListener(sessionChanged)
         refresh()
+        // Back from allowing Pocket Foundry to install apps: the update it was waiting for.
+        downloaded?.takeIf { packageManager.canRequestPackageInstalls() }?.let { installUpdate(it) }
     }
 
     override fun onPause() {
@@ -195,7 +210,7 @@ class LauncherActivity : Activity() {
                 setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://factorio.com/download"))) }
             })
         })
-        if (!Gpu.supported) inset.addView(label(this, "Needs an Adreno 6xx or newer: this phone's ${Gpu.name} isn't supported yet.", 14f, Factorio.ERROR))
+        if (!Gpu.supported) inset.addView(label(this, "No GPU driver for this phone's ${Gpu.name} yet: the game runs on the CPU, slowly.", 14f, Factorio.MUTED))
         welcomeError = label(this, "", 14f, Factorio.ERROR)
         inset.addView(welcomeError)
         panel.addView(inset)
@@ -278,7 +293,7 @@ class LauncherActivity : Activity() {
 
     private fun buildSettings(): View {
         val panel = stack(this, Factorio.PANEL, sunken = false, padding = 8, gap = 10)
-        settingsNote = label(this, "Resolution and sprites change when Factorio next starts.", 13f, Factorio.MUTED)
+        settingsNote = label(this, "Resolution, sprites, graphics and the FPS counter change when Factorio next starts.", 13f, Factorio.MUTED)
         panel.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(heading(context, "Settings"), LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -288,28 +303,40 @@ class LauncherActivity : Activity() {
 
         val display = stack(this, Factorio.INSET_LIGHT, sunken = true, padding = 10, gap = 6)
         display.addView(heading(this, "Display", 17f))
+        val displayRows = rows(display)
         resolution = Dropdown(this, resolutionNames()) { Settings.setResolutionScale(this, Settings.resolutionScales(this)[it]) }
-        display.addView(row("Resolution", resolution.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
+        displayRows.addView(row("Resolution", resolution.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
         border = Dropdown(this, listOf("Off", "Thin", "Wide")) { Settings.setBorder(this, Settings.BORDERS[it]) }
-        display.addView(row("Border", border.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
+        displayRows.addView(row("Border", border.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
         fps30 = FButton(this, "30 FPS", size = 15f).apply { setOnClickListener { Settings.setFrameRate(context, 30); refresh() } }
         fps60 = FButton(this, "60 FPS", size = 15f).apply { setOnClickListener { Settings.setFrameRate(context, 60); refresh() } }
-        display.addView(row("Frame rate", choice(fps30, fps60)))
+        displayRows.addView(row("Frame rate", choice(fps30, fps60)))
         sprites = Dropdown(this, listOf("High", "Medium")) { Settings.setSpriteQuality(this, SPRITE_QUALITIES[it]) }
-        display.addView(row("Sprite quality", sprites.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
+        displayRows.addView(row("Sprite quality", sprites.apply { layoutParams = LinearLayout.LayoutParams(dpi(170), dpi(34)) }))
+        graphicsFull = FButton(this, "Full", size = 15f).apply { setOnClickListener { Settings.setLightGraphics(context, false); refresh() } }
+        graphicsLight = FButton(this, "Light", size = 15f).apply { setOnClickListener { Settings.setLightGraphics(context, true); refresh() } }
+        displayRows.addView(row("Graphics", choice(graphicsFull, graphicsLight)))
         columns.addView(display, LinearLayout.LayoutParams(0, MATCH, 1f))
 
         val controller = stack(this, Factorio.INSET_LIGHT, sunken = true, padding = 10, gap = 6)
         controller.addView(heading(this, "Game", 17f))
-        controller.addView(row("Pause in background", checkBox(this, Settings.pauseInBackground(this)) { Settings.setPauseInBackground(this, it) }
+        val gameRows = rows(controller)
+        gameRows.addView(row("Pause in background", checkBox(this, Settings.pauseInBackground(this)) { Settings.setPauseInBackground(this, it) }
             .apply { layoutParams = LinearLayout.LayoutParams(WRAP, dpi(34)) }))
-        controller.addView(row("Vibration", checkBox(this, Settings.vibration(this)) { Settings.setVibration(this, it) }
+        gameRows.addView(row("Vibration", checkBox(this, Settings.vibration(this)) { Settings.setVibration(this, it) }
             .apply { layoutParams = LinearLayout.LayoutParams(WRAP, dpi(34)) }))
+        gameRows.addView(row("FPS counter", checkBox(this, Settings.fpsCounter(this)) { Settings.setFpsCounter(this, it) }
+            .apply { layoutParams = LinearLayout.LayoutParams(WRAP, dpi(34)) }))
+        gameRows.addView(row("Check for updates", checkBox(this, Settings.checkForUpdates(this)) {
+            Settings.setCheckForUpdates(this, it)
+            checkForUpdates()
+            refresh()
+        }.apply { layoutParams = LinearLayout.LayoutParams(WRAP, dpi(34)) }))
         editLayout = FButton(this, "Edit layout", size = 15f).apply {
             setOnClickListener { Settings.requestLayoutEditor(context); settingsOpen = false; showGame() }
         }
         layoutLater = label(this, "In a game", 15f, Factorio.FAINT)
-        controller.addView(row("Controls layout", FrameLayout(this).apply {
+        gameRows.addView(row("Controls layout", FrameLayout(this).apply {
             addView(editLayout, FrameLayout.LayoutParams(WRAP, dpi(40), Gravity.END))
             addView(layoutLater, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL))
             layoutParams = LinearLayout.LayoutParams(WRAP, dpi(40))
@@ -324,6 +351,8 @@ class LauncherActivity : Activity() {
                     LinearLayout.LayoutParams(WRAP, dpi(44)))
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(label(context, "Pocket Foundry ${packageManager.getPackageInfo(packageName, 0).versionName} · GPL-3.0", 13f, Factorio.FAINT))
+            update = FButton(context, "", Tone.GREEN, size = 15f).apply { setOnClickListener { Updates.available?.let { showUpdate(it) } } }
+            addView(update, LinearLayout.LayoutParams(WRAP, dpi(44)).apply { marginStart = dpi(8) })
             addView(FButton(context, "Driver", size = 15f).apply { setOnClickListener { showDrivers() } },
                     LinearLayout.LayoutParams(WRAP, dpi(44)).apply { marginStart = dpi(12) })
             addView(FButton(context, "Saves", size = 15f).apply { setOnClickListener { showSaves() } },
@@ -331,6 +360,124 @@ class LauncherActivity : Activity() {
             addView(importAgain, LinearLayout.LayoutParams(WRAP, dpi(44)).apply { marginStart = dpi(4) })
         })
         return panel
+    }
+
+    /** A column's rows under its heading, scrolling on a screen too short for them all. */
+    private fun rows(column: LinearLayout): LinearLayout {
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = column.dividerDrawable
+        }
+        column.addView(ScrollView(this).apply {
+            isVerticalFadingEdgeEnabled = true
+            setFadingEdgeLength(dpi(24))
+            keepScrollBar()
+            addView(rows)
+        }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        return rows
+    }
+
+    /** Once per start, unless it's off in Settings; turning it on there checks then. */
+    private fun checkForUpdates() {
+        if (!Updates.enabled(this) || Updates.checked || checkingUpdates || !Settings.checkForUpdates(this)) return
+        checkingUpdates = true
+        thread(name = "pocketfoundry-update-check") {
+            val release = runCatching { Updates.check(this) }.onFailure { Log.i("PocketFoundry", "No update check: ${it.message}") }
+            runOnUiThread {
+                checkingUpdates = false
+                refresh()
+                release.getOrNull()?.takeIf { it.version != Settings.updateShown(this) && Session.state == Session.State.STOPPED &&
+                                              dialog == null && !importingNow }?.let { showUpdate(it) }
+            }
+        }
+    }
+
+    /** What's new in every release since this one, newest first, with Update. On start once per release, and from Settings. */
+    private fun showUpdate(release: Updates.Release) {
+        Settings.setUpdateShown(this, release.version)
+        val panel = stack(this, Factorio.PANEL, sunken = false, padding = 8, gap = 10)
+        panel.addView(heading(this, "Pocket Foundry ${release.version} is out"))
+        val notes = stack(this, Factorio.INSET_LIGHT, sunken = true, padding = 10, gap = 6)
+        for ((version, changes) in release.changes) {
+            notes.addView(heading(this, version, 17f))
+            for (change in changes.ifEmpty { listOf("Details on GitHub.") }) {
+                // Wrapped lines start under the text, not under the bullet.
+                val text = SpannableStringBuilder("•  $change").apply {
+                    setSpan(LeadingMarginSpan.Standard(0, dpi(14)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                notes.addView(label(this, text, 15f))
+            }
+        }
+        val tallest = resources.displayMetrics.heightPixels - dpi(190)
+        panel.addView(object : ScrollView(this) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) =
+                super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(tallest, View.MeasureSpec.AT_MOST))
+        }.apply { addView(notes) }, LinearLayout.LayoutParams(MATCH, WRAP))
+        val status = label(this, "", 14f, Factorio.ERROR)
+        panel.addView(status)
+        val button = FButton(this, "Update", Tone.GREEN, Arrow.RIGHT).apply { setOnClickListener { startUpdate() } }
+        panel.addView(LinearLayout(this).apply {
+            addView(FButton(context, "Later", Tone.RED, Arrow.LEFT).apply { setOnClickListener { closeDialog() } },
+                    LinearLayout.LayoutParams(WRAP, dpi(44)))
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(button, LinearLayout.LayoutParams(WRAP, dpi(44)))
+        })
+        showDialog(panel, 560)
+        updateButton = button
+        updateStatus = status
+        refresh()
+    }
+
+    /** Downloads the newer release and hands it to Android's installer, which closes the app once it's in. */
+    private fun startUpdate() {
+        val release = Updates.available ?: return
+        updating = "Downloading…"
+        updateError = null
+        refresh()
+        thread(name = "pocketfoundry-update") {
+            var last = -1
+            val result = runCatching {
+                Updates.download(this, release) { progress ->
+                    val percent = (progress * 100).toInt()
+                    if (percent != last) { last = percent; runOnUiThread { updating = "Downloading $percent%"; refresh() } }
+                }
+            }
+            runOnUiThread {
+                result.onSuccess { installUpdate(it) }.onFailure { failure ->
+                    Log.w("PocketFoundry", "Update failed", failure)
+                    updating = null
+                    updateError = "The update didn't download: ${failure.message}"
+                    refresh()
+                }
+            }
+        }
+    }
+
+    /**
+     * Android asks once whether Pocket Foundry may install apps, on its own settings page; going there would cancel
+     * an install already handed over, so the update waits for the way back (onResume).
+     */
+    private fun installUpdate(file: File) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            downloaded = file
+            updating = null
+            updateError = "Allow Pocket Foundry to install apps, then come back: the update carries on."
+            refresh()
+            startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        downloaded = null
+        updating = "Installing…"
+        updateError = null
+        refresh()
+        thread(name = "pocketfoundry-install") {
+            runCatching { Updates.install(this, file) { reason -> runOnUiThread { updating = null; updateError = reason; refresh() } } }
+                .onFailure { failure ->
+                    Log.w("PocketFoundry", "Update failed", failure)
+                    runOnUiThread { updating = null; updateError = "Android didn't take the update: ${failure.message}"; refresh() }
+                }
+        }
     }
 
     private fun row(text: String, control: View) = LinearLayout(this).apply {
@@ -345,7 +492,7 @@ class LauncherActivity : Activity() {
         val short = minOf(mode.physicalWidth, mode.physicalHeight)
         val default = Settings.defaultResolutionScale(this)
         return Settings.resolutionScales(this).map { scale ->
-            val note = when (scale) { 100 -> "Native"; default -> "Default"; else -> null }
+            val note = when (scale) { 100 -> "Native"; default -> "Default"; default * 2 -> "CPU"; else -> null }
             SpannableStringBuilder("${long * 100 / scale} × ${short * 100 / scale}").apply {
                 if (note != null) {
                     val start = length
@@ -418,7 +565,7 @@ class LauncherActivity : Activity() {
 
         val failure = error ?: Session.lastFailure?.let { status ->
             when {
-                !Gpu.supported && !Drivers.imported(this) -> "This phone's GPU isn't supported yet."
+                !Gpu.supported && !Drivers.imported(this) && !Drivers.cpu(this) -> "No driver for this phone's GPU yet: choose CPU in Driver."
                 Session.noWindow -> "The graphics driver didn't start. See Logs."
                 else -> "Factorio stopped unexpectedly ($status). See Logs."
             }
@@ -449,11 +596,26 @@ class LauncherActivity : Activity() {
         fps30.tone = if (fps == 30) Tone.ORANGE else Tone.GREY
         fps60.tone = if (fps == 60) Tone.ORANGE else Tone.GREY
         sprites.selected = SPRITE_QUALITIES.indexOf(Settings.spriteQuality(this)).coerceAtLeast(0)
+        val light = Settings.lightGraphics(this)
+        graphicsFull.tone = if (light) Tone.GREY else Tone.ORANGE
+        graphicsLight.tone = if (light) Tone.ORANGE else Tone.GREY
         settingsNote.visibility = if (inGame) View.VISIBLE else View.GONE
         border.selected = Settings.BORDERS.indexOf(Settings.border(this)).coerceAtLeast(0)
         editLayout.visibility = if (live) View.VISIBLE else View.GONE
         layoutLater.visibility = if (live) View.GONE else View.VISIBLE
         importAgain.isEnabled = !inGame && idle
+        val release = Updates.available?.takeIf { Settings.checkForUpdates(this) }
+        update.visibility = if (release != null || updating != null) View.VISIBLE else View.GONE
+        update.text = updating ?: "Update to ${release?.version}"
+        update.isEnabled = updating == null && !inGame && idle
+        updateButton?.apply {
+            text = updating ?: "Update"
+            isEnabled = updating == null && !inGame && idle
+        }
+        updateStatus?.apply {
+            text = updateError ?: if (inGame) "Quit the game first: updating closes Pocket Foundry." else ""
+            visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        }
     }
 
     private fun whenSaved(millis: Long): String {
@@ -529,6 +691,8 @@ class LauncherActivity : Activity() {
         savesStatus = null
         driverList = null
         driverStatus = null
+        updateButton = null
+        updateStatus = null
     }
 
     private var driverList: LinearLayout? = null
@@ -577,9 +741,10 @@ class LauncherActivity : Activity() {
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             val remove = FButton(context, "Remove").apply {
                 setOnClickListener {
-                    Drivers.remove(context, Settings.driver(context))
-                    Settings.setDriver(context, Drivers.ZINK)
-                    listDrivers()
+                    changeDriver {
+                        Drivers.remove(context, Settings.driver(context))
+                        Settings.clearDriver(context)
+                    }
                 }
             }
             val import = FButton(context, "Import").apply { setOnClickListener { pickDriver() } }
@@ -610,11 +775,20 @@ class LauncherActivity : Activity() {
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-                setOnClickListener { Settings.setDriver(context, driver.id); listDrivers() }
+                setOnClickListener { changeDriver { Settings.setDriver(context, driver.id) } }
             }, LinearLayout.LayoutParams(MATCH, dpi(42)))
         }
         (list.parent as View).layoutParams.height = if (drivers.size > 3) dpi(3 * 46 + 12) else WRAP
-        driverButtons.firstOrNull()?.isEnabled = chosen != Drivers.ZINK && chosen != Drivers.FREEDRENO
+        driverButtons.firstOrNull()?.isEnabled = Drivers.imported(this)
+    }
+
+    /** A driver change, with the sprites, graphics and resolution for it when it moves to or from the CPU. */
+    private fun changeDriver(change: () -> Unit) {
+        val cpu = Drivers.cpu(this)
+        change()
+        if (Drivers.cpu(this) != cpu) Settings.applyDriverDefaults(this)
+        listDrivers()
+        refresh()
     }
 
     private fun pickDriver() {
@@ -632,7 +806,7 @@ class LauncherActivity : Activity() {
             val result = runCatching { Drivers.import(this, uri) }
             runOnUiThread {
                 driverButtons.forEach { it.isEnabled = true }
-                result.onSuccess { Settings.setDriver(this, it.id) }
+                result.onSuccess { changeDriver { Settings.setDriver(this, it.id) } }
                 driverStatus?.visibility = View.VISIBLE
                 driverStatus?.text = result.fold({ "Added ${it.name}." }, { it.message ?: "That didn't work. See Logs." })
                 driverStatus?.setTextColor(if (result.isSuccess) Factorio.MUTED else Factorio.ERROR)
@@ -834,7 +1008,7 @@ class LauncherActivity : Activity() {
             if (prefs.getBoolean("pocketFoundryDefaults", false)) return
             prefs.edit()
                 .putString("displayResolutionMode", "scaled")
-                .putInt("displayScale", Settings.defaultResolutionScale(context))
+                .putInt("displayScale", Settings.startingResolutionScale(context))
                 .putString("forceOrientation", "landscape")
                 .putBoolean("fullscreen", true)
                 .putBoolean("hideCutout", true)
