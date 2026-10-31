@@ -108,7 +108,7 @@ tools/setup.sh
 
 ## More
 
-- [Playing](docs/playing.md): controls, controllers, settings and saves
+- [Playing](docs/playing.md): controls, controllers, settings, saves and game files
 - [Phones and drivers](docs/phones.md)
 - [Building and how it works](docs/building.md)
 
