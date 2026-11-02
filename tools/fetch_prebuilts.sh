@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
 set -e
 
+# Move to the project root regardless of where the script is run from
+cd "$(dirname "$0")/.."
+
 # ///////////////
 # Use "-PSKIP_CXX=true" to skip C++ build.
 # ///////////////
 
-# --- RELEASE VERSION (change manually when needed) ---
-DEFAULT_VERSION="0.7.5"
-VERSION="${1:-$DEFAULT_VERSION}"
-REPO="JulioFerrero/pocket-foundry"
+# Check if version is passed as argument $1, otherwise ask Gradle
+if [ -n "$1" ]; then
+    VERSION="$1"
+else
+    echo "Fetching versionName from Gradle..."
+    VERSION=$(./gradlew -q properties | grep '^versionName:' | cut -d' ' -f2)
+fi
 
+# Fallback check
+if [ -z "$VERSION" ]; then
+    echo "❌ Error: Could not determine versionName from gradle.properties or arguments."
+    exit 1
+fi
+
+REPO="JulioFerrero/pocket-foundry"
 APK_NAME="pocket-foundry-${VERSION}.apk"
 URL="https://github.com/${REPO}/releases/download/v${VERSION}/${APK_NAME}"
-
-# Move to the project root regardless of where the script is run from
-cd "$(dirname "$0")/.."
 
 echo "=== Pocket Foundry: Prebuilt binaries setup ==="
 echo "Target version: v${VERSION}"
