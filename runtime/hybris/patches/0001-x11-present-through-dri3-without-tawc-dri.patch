@@ -13,6 +13,9 @@ their format. There a swapchain draws into ordinary BGRA images and copies each 
 buffers: the X server reads them in the window's BGRX order whatever their format says. The copies are recorded once
 per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the same on any driver, to test it.
 
+HYBRIS_SWAPCHAIN_TEST=1 paints the copied buffers' top half magenta and copies only the bottom half of each frame, to
+tell a screen that never shows the buffers from frames that are black.
+
 --- a/hybris/vulkan/Makefile.am	2026-11-02 14:03:33
 +++ b/hybris/vulkan/Makefile.am	2026-11-02 14:03:33
 @@ -91,7 +91,7 @@
@@ -308,7 +311,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
      capabilities->supportedUsageFlags = usage;
      return VK_SUCCESS;
 --- a/hybris/vulkan/icd/swapchain.c	2026-11-02 14:03:33
-+++ b/hybris/vulkan/icd/swapchain.c	2026-11-02 14:52:00
++++ b/hybris/vulkan/icd/swapchain.c	2026-11-02 21:08:54
 @@ -34,6 +34,14 @@
      enum image_state state;
      int acquire_fence;
@@ -357,7 +360,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
  {
      PFN_vkCreateImage create = (PFN_vkCreateImage)device->resolver(device->handle, "vkCreateImage");
      if (!create) return VK_ERROR_EXTENSION_NOT_PRESENT;
-@@ -136,33 +154,218 @@
+@@ -136,13 +154,13 @@
          .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
          .pNext = &buffer,
          .imageType = VK_IMAGE_TYPE_2D,
@@ -373,10 +376,10 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          .sharingMode = info->imageSharingMode,
          .queueFamilyIndexCount = info->queueFamilyIndexCount,
          .pQueueFamilyIndices = info->pQueueFamilyIndices,
-         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+@@ -150,19 +168,219 @@
      return create(device->handle, &image_info, allocator, image);
-+}
-+
+ }
+ 
 +/* A blitting swapchain's image for the application: an ordinary image of its format and usage, in device memory. */
 +static VkResult create_drawn_image(const struct hybris_icd_device *device,
 +    const VkSwapchainCreateInfoKHR *info, const VkAllocationCallbacks *allocator,
@@ -445,11 +448,18 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
 +    PFN_vkCmdPipelineBarrier barrier = (PFN_vkCmdPipelineBarrier)
 +        device->resolver(device->handle, "vkCmdPipelineBarrier");
 +    PFN_vkCmdCopyImage copy = (PFN_vkCmdCopyImage)device->resolver(device->handle, "vkCmdCopyImage");
++    PFN_vkCmdClearColorImage clear = (PFN_vkCmdClearColorImage)
++        device->resolver(device->handle, "vkCmdClearColorImage");
 +    PFN_vkCreateFence create_fence = (PFN_vkCreateFence)device->resolver(device->handle, "vkCreateFence");
 +    PFN_vkDestroyCommandPool destroy_pool = (PFN_vkDestroyCommandPool)
 +        device->resolver(device->handle, "vkDestroyCommandPool");
-+    if (!create_pool || !allocate || !begin || !end || !barrier || !copy || !create_fence || !destroy_pool)
++    if (!create_pool || !allocate || !begin || !end || !barrier || !copy || !clear || !create_fence || !destroy_pool)
 +        return VK_ERROR_EXTENSION_NOT_PRESENT;
++    /* HYBRIS_SWAPCHAIN_TEST=1 paints the buffers' top half magenta and copies only the bottom half of each frame: on
++     * a black screen, magenta says the buffers reach it and the frames are black. */
++    const char *test = getenv("HYBRIS_SWAPCHAIN_TEST");
++    uint32_t top = test && !strcmp(test, "1") ? state->extent.height / 2 : 0;
++    if (top) fprintf(stderr, "hybris WSI: test: top half magenta, bottom half the frame\n");
 +    VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 +        .queueFamilyIndex = family};
 +    VkResult result = create_pool(device->handle, &pool_info, allocator, &state->pool);
@@ -481,9 +491,17 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
 +             .image = image->native_image, .subresourceRange = whole}};
 +        barrier(image->blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
 +            0, NULL, 0, NULL, 2, to_copy);
++        if (top) {
++            const VkClearColorValue magenta = {.float32 = {1, 0, 1, 1}};
++            clear(image->blit, image->native_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &magenta, 1, &whole);
++            VkMemoryBarrier cleared = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
++            barrier(image->blit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
++                1, &cleared, 0, NULL, 0, NULL);
++        }
 +        const VkImageSubresourceLayers layers = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-+        VkImageCopy region = {.srcSubresource = layers, .dstSubresource = layers,
-+            .extent = {state->extent.width, state->extent.height, 1}};
++        VkImageCopy region = {.srcSubresource = layers, .srcOffset = {0, (int32_t)top, 0}, .dstSubresource = layers,
++            .dstOffset = {0, (int32_t)top, 0}, .extent = {state->extent.width, state->extent.height - top, 1}};
 +        /* Byte for byte, not converted: the X server reads the buffer in its window's BGRX order, whatever format
 +         * the buffer is labelled with. */
 +        copy(image->blit, image->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image->native_image,
@@ -508,8 +526,8 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
 +        for (uint32_t i = 0; i < state->count; ++i) state->images[i].blit = VK_NULL_HANDLE;
 +    }
 +    return result;
- }
- 
++}
++
 +/* Submits the image's blit after the application's waits. Its buffer came back only after the image's previous
 + * blit had finished, so the wait for that one returns at once. */
 +static VkResult submit_blit(const struct hybris_icd_device *device, struct swapchain_state *state,
@@ -586,7 +604,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          if (state->images[i].native && !state->retired && state->window &&
              state->images[i].state != IMAGE_PRESENTED) {
              state->window->ops->cancel(state->window, state->images[i].native,
-@@ -173,6 +376,12 @@
+@@ -173,6 +391,12 @@
          if (state->images[i].native)
              state->images[i].native->common.decRef(&state->images[i].native->common);
          state->images[i].image = VK_NULL_HANDLE;
@@ -599,7 +617,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          state->images[i].native = NULL;
      }
  }
-@@ -190,7 +399,18 @@
+@@ -190,7 +414,18 @@
      if (info->oldSwapchain) retire_swapchain(info->oldSwapchain);
      if (!info->imageExtent.width || !info->imageExtent.height)
          return VK_ERROR_INITIALIZATION_FAILED;
@@ -619,7 +637,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
      if (!pixel) return VK_ERROR_FORMAT_NOT_SUPPORTED;
      /* RGBX preserves the Vulkan RGBA image layout while making the native
       * compositor ignore application alpha, as OPAQUE requires. */
-@@ -224,12 +444,13 @@
+@@ -224,12 +459,13 @@
       * report SUBOPTIMAL while the window and image sizes differ; actual surface
       * loss and pool errors retain their ordinary failure paths. */
      VkImageFormatProperties properties;
@@ -636,7 +654,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          !(info->compositeAlpha & capabilities.supportedCompositeAlpha))
          return VK_ERROR_INITIALIZATION_FAILED;
      for (const VkBaseInStructure *next = info->pNext; next; next = next->pNext) {
-@@ -242,7 +463,7 @@
+@@ -242,7 +478,7 @@
              "vkGetSwapchainGrallocUsage2ANDROID");
      if (!usage2) return VK_ERROR_EXTENSION_NOT_PRESENT;
      uint64_t consumer = 0, producer = 0;
@@ -645,7 +663,16 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
      if (result != VK_SUCCESS) {
          fprintf(stderr, "hybris WSI: gralloc usage query failed: result=%d format=%d usage=0x%x\n",
              result, info->imageFormat, info->imageUsage);
-@@ -268,6 +489,8 @@
+@@ -257,6 +493,8 @@
+     int usage = android_convertGralloc1To0Usage(producer, consumer);
+     uint32_t count = info->minImageCount;
+     if (count < 2 || count > 8) return VK_ERROR_INITIALIZATION_FAILED;
++    fprintf(stderr, "hybris WSI: %u buffers of %ux%u, Vulkan format %d, gralloc usage 0x%x\n", count,
++        info->imageExtent.width, info->imageExtent.height, native_format, usage);
+     struct swapchain_state *state = object_alloc(allocator, sizeof(*state),
+         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+     if (!state) return VK_ERROR_OUT_OF_HOST_MEMORY;
+@@ -268,6 +506,8 @@
      state->extent = info->imageExtent;
      state->custom_allocator = allocator != NULL;
      if (allocator) state->allocator = *allocator;
@@ -654,7 +681,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
      state->images = object_alloc(allocator, count * sizeof(*state->images),
          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
      if (!state->images) {
-@@ -303,8 +526,11 @@
+@@ -303,8 +543,11 @@
          buffer->common.incRef(&buffer->common);
          state->images[i].native = buffer;
          state->images[i].acquire_fence = fence;
@@ -668,7 +695,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          if (result != VK_SUCCESS) {
              fprintf(stderr, "hybris WSI: native image import failed: result=%d format=%d usage=0x%x"
                  " native_format=%d native_usage=0x%x extent=%ux%u\n",
-@@ -319,6 +545,8 @@
+@@ -319,6 +562,8 @@
              context.resolver(device, "vkCreateSemaphore");
          VkSemaphoreCreateInfo semaphore = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
          result = create_semaphore(device, &semaphore, allocator, &state->images[i].present_ready);
@@ -677,7 +704,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
          if (result != VK_SUCCESS) {
              destroy_images(&context, state);
              object_free(allocator, state->custom_allocator, state->images);
-@@ -451,7 +679,7 @@
+@@ -451,7 +696,7 @@
          return VK_ERROR_EXTENSION_NOT_PRESENT;
      }
      /* Driver owns native_fence after this call, including failure. */
@@ -686,7 +713,7 @@ per image on the presenting queue's family. HYBRIS_SWAPCHAIN_BLIT=1 does the sam
      if (result != VK_SUCCESS) return result;
      state->images[slot].state = IMAGE_ACQUIRED;
      *index = slot;
-@@ -545,9 +773,17 @@
+@@ -545,9 +790,17 @@
          (PFN_vkQueueSignalReleaseImageANDROID)context->resolver(context->handle,
              "vkQueueSignalReleaseImageANDROID");
      if (!release_image) return VK_ERROR_EXTENSION_NOT_PRESENT;
