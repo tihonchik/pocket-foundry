@@ -6,6 +6,7 @@ import android.view.Gravity
 import android.view.View
 import app.pocketfoundry.LauncherActivity
 import app.pocketfoundry.Uris
+import app.pocketfoundry.drivers.Drivers
 import app.pocketfoundry.drivers.Gpu
 import app.pocketfoundry.game.GameImport
 import app.pocketfoundry.ui.Arrow
@@ -19,6 +20,7 @@ import app.pocketfoundry.ui.WRAP
 import app.pocketfoundry.ui.add
 import app.pocketfoundry.ui.background
 import app.pocketfoundry.ui.button
+import app.pocketfoundry.ui.capped
 import app.pocketfoundry.ui.label
 import app.pocketfoundry.ui.link
 import app.pocketfoundry.ui.panel
@@ -28,7 +30,7 @@ import app.pocketfoundry.ui.stack
 
 /** Before the game is imported: what to import and where to get it. */
 class WelcomeScreen(private val launcher: LauncherActivity) {
-    private val error = label(launcher, "", 14f, Factorio.ERROR)
+    private val error = label(launcher, "", 14f, Factorio.ERROR).capped(3)
     private val importButton = button(launcher, "Import Factorio", Tone.GREEN, Arrow.RIGHT, onClick = launcher::pickGame)
 
     val view: View = panel(launcher, "Pocket Foundry") {
@@ -40,7 +42,9 @@ class WelcomeScreen(private val launcher: LauncherActivity) {
                 add(link(launcher, "factorio.com", "https://factorio.com/download"))
             })
             if (!Gpu.supported) {
-                add(label(launcher, "No GPU driver for this phone's ${Gpu.name} yet: the game runs on the CPU, slowly.", 14f, Factorio.MUTED))
+                val note = if (Drivers.cpu(launcher)) "No GPU driver for this phone's ${Gpu.name} yet: the game runs on the CPU, slowly."
+                           else "This phone's ${Gpu.name} runs the game through its own driver, still experimental."
+                add(label(launcher, note, 14f, Factorio.MUTED))
             }
             add(error)
         })

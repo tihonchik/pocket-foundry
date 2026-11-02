@@ -14,6 +14,7 @@ import com.termux.x11.MainActivity
 import app.pocketfoundry.drivers.Drivers
 import app.pocketfoundry.game.GameImport
 import app.pocketfoundry.game.Runtime
+import app.pocketfoundry.game.ScreenLog
 import app.pocketfoundry.game.Session
 import app.pocketfoundry.launcher.HomeScreen
 import app.pocketfoundry.launcher.ImportScreen
@@ -70,6 +71,7 @@ class LauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         X11Prefs(this).setUp()
         Drivers.fillDefaults(this)
+        Drivers.moveOldOptions(this)
         updates.check()
         edgeToEdge()
         val overlay = FrameLayout(this).apply {
@@ -254,7 +256,8 @@ class LauncherActivity : Activity() {
             Session.start(this, if (save != null) listOf("--load-game", save.path) else emptyList())
         }) { result ->
             busy = null
-            result.onFailure { error = it.message ?: "Factorio didn't start. See Logs." }
+            // Logs keeps the whole of it: Home has room for two lines.
+            result.onFailure { error = it.message ?: "Factorio didn't start. See Logs."; ScreenLog.add("didn't start: $it") }
             refresh()
             if (result.isSuccess) showGame()
         }
