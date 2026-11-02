@@ -23,6 +23,9 @@ emulation, no streaming, no game files in the app.
 
 Needs Android 10 or later.
 
+Releases are signed with the certificate whose SHA-256 is
+`0e301617d64bc294bcc2d1dbee71a8c83f8fcc7b7c3616edc26e9b2e89c7e35f`.
+
 ## Phones
 
 Pocket Foundry ships one GPU driver, Turnip, and tests it on Adreno 6xx and newer. Other GPUs can use a community
