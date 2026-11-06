@@ -14,11 +14,11 @@ import android.widget.EditText
 import android.widget.ScrollView
 import android.widget.TextView
 import app.pocketfoundry.LauncherActivity
+import app.pocketfoundry.core.drivers.DriverCheck
 import app.pocketfoundry.core.drivers.DriverImport
 import app.pocketfoundry.core.drivers.Drivers
 import app.pocketfoundry.core.drivers.Gpu
 import app.pocketfoundry.core.game.Session
-import app.pocketfoundry.ui.kit.BUTTON_HEIGHT
 import app.pocketfoundry.ui.kit.FButton
 import app.pocketfoundry.ui.kit.Factorio
 import app.pocketfoundry.ui.kit.Frame
@@ -36,13 +36,13 @@ import app.pocketfoundry.ui.kit.link
 import app.pocketfoundry.ui.kit.pad
 import app.pocketfoundry.ui.kit.row
 import app.pocketfoundry.ui.kit.shown
-import app.pocketfoundry.ui.kit.spacer
 import app.pocketfoundry.ui.kit.stack
 import app.pocketfoundry.ui.kit.withNote
 
 /**
- * The drivers in sections on the left, the one looked at on the right: Use, what it is, its GPUs, how the last game with
- * it went, and its Options for testing it.
+ * The drivers in sections on the left, the one looked at on the right: what it is, its GPUs, how the last game with it
+ * went, what its driver check found, and its Options for testing it. The bar below acts on that one: Remove, Check
+ * (the driver check again, no game needed) and Use; on a narrow phone they don't fit beside its name.
  */
 class DriverDialog(private val launcher: LauncherActivity) {
     private val host = launcher.host
@@ -59,23 +59,24 @@ class DriverDialog(private val launcher: LauncherActivity) {
     private val about = label(launcher, "", 15f)
     private val worksOn = label(launcher, "", 14f)
     private val lastGame = label(launcher, "", 14f)
+    private val checked = label(launcher, "", 14f)
+    private val checkedFact = fact("Driver check", checked)
     // MaliBridge's licence asks for this credit wherever the app shows credits.
     private val credit = link(launcher, "Uses MaliBridge by ASEbrahim", MALIBRIDGE, 13f)
-    private val useButton = button(launcher, "Use this driver", Tone.GREEN) { choose(viewing) }
+    private val useButton = button(launcher, "Use", Tone.GREEN) { choose(viewing) }
     private val removeButton = button(launcher, "Remove") { remove(viewing) }
+    private val checkButton = button(launcher, "Check") { checkDriver(viewing) }
     private val options = optionsField()
     private val details = stack(launcher, Frame.DEEP, padding = 10, gap = 8) {
         add(row(launcher) {
             add(name)
             add(recommended, start = 10)
-            spacer()
-            add(removeButton, height = BUTTON_HEIGHT, start = 8)
-            add(useButton, height = BUTTON_HEIGHT, start = 4)
         })
         add(detail)
         add(about)
         add(fact("Works on", worksOn))
         add(fact("Last game", lastGame))
+        add(checkedFact)
         add(credit)
         add(stack(launcher, Frame.SHALLOW, padding = 4) { add(options) })
     }
@@ -89,7 +90,8 @@ class DriverDialog(private val launcher: LauncherActivity) {
         val screen = launcher.resources.configuration
         val chrome = CHROME + if (status.shown) STATUS else 0
         val title = Gpu.name?.let { withNote(TITLE, it, Factorio.FAINT, 15, gap = "   ") } ?: TITLE
-        host.show(title, minOf(WIDTH, screen.screenWidthDp - MARGIN), "Close", importButton) {
+        host.show(title, minOf(WIDTH, screen.screenWidthDp - MARGIN), "Close", importButton, removeButton, checkButton,
+                  useButton) {
             add(row(launcher, Gravity.TOP) {
                 add(pane(list), LIST_WIDTH, MATCH)
                 add(pane(details), 0, MATCH, weight = 1f, start = 8)
@@ -182,9 +184,14 @@ class DriverDialog(private val launcher: LauncherActivity) {
             Drivers.Outcome.DIDNT_START -> "Didn't start"
             null -> "Not tried yet"
         }
+        // Freedreno and the CPU draw without Zink: nothing for the check to turn off.
+        checkedFact.shown = Drivers.usesZink(id)
+        checkButton.shown = Drivers.usesZink(id)
+        checkButton.isEnabled = !Session.inGame
+        checked.text = DriverCheck.result(launcher, id)?.replaceFirstChar(Char::uppercase) ?: "Not checked yet"
         credit.shown = Drivers.isPhone(id)
         options.setText(Drivers.options(launcher, id))
-        useButton.text = if (inUse) "In use" else "Use this driver"
+        useButton.text = if (inUse) "In use" else "Use"
         useButton.isEnabled = !inUse
         removeButton.shown = driver.imported
     }
@@ -204,18 +211,35 @@ class DriverDialog(private val launcher: LauncherActivity) {
         launcher.refresh()
     }
 
+    /** Draws [id]'s test picture now, without the game. */
+    private fun checkDriver(id: String) {
+        checkButton.isEnabled = false
+        say("Drawing a test picture…")
+        background("driver-check", { Session.checkDriver(launcher, id) }) { result ->
+            say(result.fold({ "Checked. Logs has the details." }, { it.message ?: "The check didn't run. See Logs." }),
+                error = result.isFailure)
+            // A check can bring a new runtime, which forgets past games: the automatic choice may move.
+            listDrivers()
+            launcher.refresh()
+        }
+    }
+
+    /** The status line, shown even out of a game, where it's otherwise hidden. */
+    private fun say(text: String, error: Boolean = false) {
+        status.text = text
+        status.setTextColor(if (error) Factorio.ERROR else Factorio.MUTED)
+        status.shown = true
+    }
+
     private fun import(uri: Uri) {
         removeButton.isEnabled = false
         importButton.isEnabled = false
-        // Shown even out of a game, where the status is otherwise hidden.
-        status.text = "Checking the driver…"
-        status.setTextColor(Factorio.MUTED)
-        status.shown = true
+        say("Checking the driver…")
         background("driver", { DriverImport.import(launcher, uri) }) { result ->
             importButton.isEnabled = true
             removeButton.isEnabled = true
-            status.text = result.fold({ "Added ${it.name}." }, { it.message ?: "That didn't work. See Logs." })
-            status.setTextColor(if (result.isSuccess) Factorio.MUTED else Factorio.ERROR)
+            say(result.fold({ "Added ${it.name}." }, { it.message ?: "That didn't work. See Logs." }),
+                error = result.isFailure)
             result.onSuccess { viewing = it.id; choose(it.id) }.onFailure { listDrivers() }
         }
     }
